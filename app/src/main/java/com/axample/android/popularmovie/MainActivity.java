@@ -1,232 +1,176 @@
 package com.axample.android.popularmovie;
 
-import android.content.Context;
-import android.content.Intent;
-import android.content.SharedPreferences;
-import android.net.ConnectivityManager;
-import android.net.NetworkInfo;
 import android.os.Parcelable;
-import android.preference.PreferenceManager;
+import android.support.annotation.NonNull;
+import android.support.design.widget.Snackbar;
+import android.support.v4.widget.SwipeRefreshLayout;
 import android.support.v7.app.AppCompatActivity;
 import android.os.Bundle;
+import android.support.v7.widget.GridLayoutManager;
+import android.support.v7.widget.RecyclerView;
+import android.support.v7.widget.Toolbar;
 import android.view.Menu;
 import android.view.MenuItem;
-import android.view.View;
-import android.widget.AdapterView;
-import android.widget.GridView;
+import android.widget.RelativeLayout;
 import android.widget.Toast;
 
-public class MainActivity extends AppCompatActivity {
-    /**
-     * For logging purposes
-     */
-    private final String LOG_TAG = MainActivity.class.getSimpleName();
+import java.util.List;
 
-    /**
-     * Presents movie posters
-     */
-    private GridView mGridView;
+import butterknife.BindView;
+import butterknife.ButterKnife;
+import retrofit2.Call;
+import retrofit2.Callback;
+import retrofit2.Response;
 
-    /**
-     * Holds menu items
-     */
-    private Menu mMenu;
+import com.axample.android.popularmovie.adapter.MovieListAdapter;
+import com.axample.android.popularmovie.model.MovieItem;
+import com.axample.android.popularmovie.model.MovieResponse;
+
+import com.axample.android.popularmovie.adapter.MovieListAdapter;
+import com.axample.android.popularmovie.model.MovieResponse;
+import com.axample.android.popularmovie.model.MovieItem;
+
+
+
+public class MainActivity extends AppCompatActivity implements SwipeRefreshLayout.OnRefreshListener {
+
+    @BindView(R.id.toolbar) Toolbar toolbar;
+    @BindView(R.id.swipeRefresh) SwipeRefreshLayout swipeRefresh;
+    @BindView(R.id.rv) RecyclerView rv;
+    @BindView(R.id.parentMain) RelativeLayout parentMain;
+
+    String sHighestRated;
+    String sMostPopular;
+
+    private MovieListAdapter adapter;
+    private GridLayoutManager gridLayoutManager;
+    private Parcelable layoutManagerSavedState;
+
+    private String selectedSort;
+    private String categorySelected;
+    private int currentPage = 1;
+    private Call<MovieResponse> responseCall;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
-        //Log.v(LOG_TAG, "onCreate");
-
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+        ButterKnife.bind(this);
 
-        mGridView = (GridView) findViewById(R.id.gridview);
-        mGridView.setOnItemClickListener(moviePosterClickListener);
+        sHighestRated = "High Rated";
+        sMostPopular = "Most Popular";
 
-        if (savedInstanceState == null) {
-            // Get data from the Internet
-            getMoviesFromTMDb(getSortMethod());
-        } else {
-            // Get data from local resources
-            // Get Movie objects
-            Parcelable[] parcelable = savedInstanceState.
-                    getParcelableArray(getString(R.string.parcel_movie));
+        setSupportActionBar(toolbar);
 
-            if (parcelable != null) {
-                int numMovieObjects = parcelable.length;
-                Movie[] movies = new Movie[numMovieObjects];
-                for (int i = 0; i < numMovieObjects; i++) {
-                    movies[i] = (Movie) parcelable[i];
-                }
+        gridLayoutManager = new GridLayoutManager(MainActivity.this, 2);
 
-                // Load movie objects into view
-                mGridView.setAdapter(new ImageAdapter(this, movies));
-            }
+        selectedSort = "most_popular";
+        getSupportActionBar().setSubtitle(sMostPopular);
+        if (savedInstanceState != null) {
+            selectedSort = savedInstanceState.getString("selectedSort");
+            if (selectedSort.equals("high_rated"))
+                getSupportActionBar().setSubtitle(sHighestRated);
+            layoutManagerSavedState = savedInstanceState.getParcelable("layout_manager");
         }
+
+        adapter = new MovieListAdapter();
+        rv.setLayoutManager(gridLayoutManager);
+        rv.setHasFixedSize(true);
+        rv.setAdapter(adapter);
+
+        swipeRefresh.setOnRefreshListener(this);
+
+        loadData(selectedSort);
     }
 
     @Override
     public boolean onCreateOptionsMenu(Menu menu) {
-        getMenuInflater().inflate(R.menu.menu_main, mMenu);
-
-        // Make menu items accessible
-        mMenu = menu;
-
-        // Add menu items
-        mMenu.add(Menu.NONE, // No group
-                R.string.pref_sort_pop_desc_key, // ID
-                Menu.NONE, // Sort order: not relevant
-                null) // No text to display
-                .setVisible(false)
-                .setIcon(R.drawable.ic_action_whatshot)
-                .setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM);
-
-        // Same settings as the one above
-        mMenu.add(Menu.NONE, R.string.pref_sort_vote_avg_desc_key, Menu.NONE, null)
-                .setVisible(false)
-                .setIcon(R.drawable.ic_action_poll)
-                .setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM);
-
-        // Update menu to show relevant items
-        updateMenu();
-
+        getMenuInflater().inflate(R.menu.menu_home, menu);
         return true;
-    }
-
-    @Override
-    protected void onSaveInstanceState(Bundle outState) {
-        //Log.v(LOG_TAG, "onSaveInstanceState");
-
-        int numMovieObjects = mGridView.getCount();
-        if (numMovieObjects > 0) {
-            // Get Movie objects from gridview
-            Movie[] movies = new Movie[numMovieObjects];
-            for (int i = 0; i < numMovieObjects; i++) {
-                movies[i] = (Movie) mGridView.getItemAtPosition(i);
-            }
-
-            // Save Movie objects to bundle
-            outState.putParcelableArray(getString(R.string.parcel_movie), movies);
-        }
-
-        super.onSaveInstanceState(outState);
     }
 
     @Override
     public boolean onOptionsItemSelected(MenuItem item) {
         switch (item.getItemId()) {
-            case R.string.pref_sort_pop_desc_key:
-                updateSharedPrefs(getString(R.string.tmdb_sort_pop_desc));
-                updateMenu();
-                getMoviesFromTMDb(getSortMethod());
+            case R.id.menu_high_rated:
+                selectedSort = "high_rated";
+                currentPage = 1;
+                loadData(selectedSort);
+                getSupportActionBar().setSubtitle(sHighestRated);
                 return true;
-            case R.string.pref_sort_vote_avg_desc_key:
-                updateSharedPrefs(getString(R.string.tmdb_sort_vote_avg_desc));
-                updateMenu();
-                getMoviesFromTMDb(getSortMethod());
+            case R.id.menu_most_popular:
+                selectedSort = "most_popular";
+                currentPage = 1;
+                loadData(selectedSort);
+                getSupportActionBar().setSubtitle(sMostPopular);
                 return true;
             default:
+                return super.onOptionsItemSelected(item);
         }
-
-        return super.onOptionsItemSelected(item);
     }
 
-    /**
-     * Listener for clicks on movie posters in GridView
-     */
-    private final GridView.OnItemClickListener moviePosterClickListener = new GridView.OnItemClickListener() {
-        @Override
-        public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
-            Movie movie = (Movie) parent.getItemAtPosition(position);
+    @Override
+    protected void onSaveInstanceState(Bundle outState) {
+        super.onSaveInstanceState(outState);
+        outState.putString("selectedSort", selectedSort);
+        outState.putParcelable("layout_manager", rv.getLayoutManager().onSaveInstanceState());
+    }
 
-            Intent intent = new Intent(getApplicationContext(), MovieDetailsActivity.class);
-            intent.putExtra(getResources().getString(R.string.parcel_movie), movie);
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        if (responseCall != null) responseCall.cancel();
+    }
 
-            startActivity(intent);
+    @Override
+    public void onRefresh() {
+        currentPage = 1;
+        loadData(selectedSort);
+    }
+
+    void loadData(String category) {
+        categorySelected = category;
+
+        if (category.equals("most_popular")) {
+            responseCall = App.getRestClient()
+                    .getService()
+                    .getPopularMovie(currentPage);
+        } else {
+            responseCall = App.getRestClient()
+                    .getService()
+                    .getHighRatedMovie(currentPage);
         }
-    };
 
+        responseCall.enqueue(new Callback<MovieResponse>() {
+            @Override
+            public void onResponse(@NonNull Call<MovieResponse> call, @NonNull Response<MovieResponse> response) {
+                if (response.isSuccessful()) {
+                    List<MovieItem> data = response.body().getResults();
+                    if (swipeRefresh.isRefreshing()) swipeRefresh.setRefreshing(false);
+                    if (currentPage > 1) {
+                        adapter.updateData(data);
+                    } else {
+                        adapter.replaceAll(data);
 
-    /**
-     * If device has Internet the magic happens when app launches. The app will start the process
-     * of collecting data from the API and present it to the user.
-     * <p/>
-     * If the device has no connectivity it will display a Toast explaining that app needs
-     * Internet to work properly.
-     *
-     * @param sortMethod tmdb API method for sorting movies
-     */
-    private void getMoviesFromTMDb(String sortMethod) {
-        if (isNetworkAvailable()) {
-            // Key needed to get data from TMDb
-            String apiKey = getString(R.string.key_themoviedb);
+                        if (layoutManagerSavedState != null) {
+                            rv.getLayoutManager().onRestoreInstanceState(layoutManagerSavedState);
+                        }
+                    }
 
-            // Listener for when AsyncTask is ready to update UI
-            OnTaskCompleted taskCompleted = new OnTaskCompleted() {
-                @Override
-                public void onFetchMoviesTaskCompleted(Movie[] movies) {
-                    mGridView.setAdapter(new ImageAdapter(getApplicationContext(), movies));
+                } else {
+                    loadFailed();
                 }
-            };
+            }
 
-            // Execute task
-            FetchMovieAsyncTask movieTask = new FetchMovieAsyncTask(taskCompleted, apiKey);
-            movieTask.execute(sortMethod);
-        } else {
-            Toast.makeText(this, getString(R.string.error_need_internet), Toast.LENGTH_LONG).show();
-        }
+            @Override
+            public void onFailure(Call<MovieResponse> call, Throwable t) {
+                loadFailed();
+            }
+        });
     }
 
-    /**
-     * Checks if there is Internet accessible.
-     * Based on a stackoverflow snippet
-     *
-     * @return True if there is Internet. False if not.
-     */
-    private boolean isNetworkAvailable() {
-        ConnectivityManager connectivityManager
-                = (ConnectivityManager) this.getSystemService(Context.CONNECTIVITY_SERVICE);
-        NetworkInfo activeNetworkInfo = connectivityManager.getActiveNetworkInfo();
-
-        return activeNetworkInfo != null && activeNetworkInfo.isConnected();
-    }
-
-    /**
-     * Update menu based on method found set in SharedPreferences
-     */
-    private void updateMenu() {
-        String sortMethod = getSortMethod();
-
-        if (sortMethod.equals(getString(R.string.tmdb_sort_pop_desc))) {
-            mMenu.findItem(R.string.pref_sort_pop_desc_key).setVisible(false);
-            mMenu.findItem(R.string.pref_sort_vote_avg_desc_key).setVisible(true);
-        } else {
-            mMenu.findItem(R.string.pref_sort_vote_avg_desc_key).setVisible(false);
-            mMenu.findItem(R.string.pref_sort_pop_desc_key).setVisible(true);
-        }
-    }
-
-    /**
-     * Gets the sort method set by user from SharedPreferences. If no sort method is defined it will
-     * default to sorting by popularity.
-     *
-     * @return Sort method from SharedPreferenced
-     */
-    private String getSortMethod() {
-        SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(this);
-
-        return prefs.getString(getString(R.string.pref_sort_method_key),
-                getString(R.string.tmdb_sort_pop_desc));
-    }
-
-    /**
-     * Saves the selected sort method
-     *
-     * @param sortMethod Sort method to save
-     */
-    private void updateSharedPrefs(String sortMethod) {
-        SharedPreferences sharedPref = PreferenceManager.getDefaultSharedPreferences(this);
-        SharedPreferences.Editor editor = sharedPref.edit();
-        editor.putString(getString(R.string.pref_sort_method_key), sortMethod);
-        editor.apply();
+    void loadFailed() {
+        if (swipeRefresh.isRefreshing()) swipeRefresh.setRefreshing(false);
+        Toast.makeText(this, "Failed to load data!", Toast.LENGTH_SHORT).show();
     }
 }
